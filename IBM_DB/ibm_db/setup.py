@@ -5,6 +5,8 @@ import warnings
 import tarfile
 import zipfile
 import shutil
+import subprocess
+import stat
 
 if sys.version_info >= (3, ):
     from urllib import request
@@ -47,14 +49,51 @@ def _checkOSList(list, val):
             return True
     return False
 
+def fixup_install_name(file, new_install_name):
+  '''
+   Force the install name of the specified file to be overwritten to the
+   specified value
+  '''
+  try:
+    # install_name_tool requires that the file be writeable, so toggle the
+    # owner bits to write for long enough that we can overwrite the
+    # install_name header
+    #
+    st = os.stat(file)
+    orig_mode = st.st_mode
+    os.chmod(file, orig_mode | stat.S_IWUSR)
+    out = subprocess.check_output(['install_name_tool', 
+                                   '-id', 
+                                   new_install_name,
+                                   file])
+    os.chmod(file, orig_mode)
+  except OSError as e:
+    sys.stdout.write('Failed to change install name. Is install_name_tool installed?\n')
+  except subprocess.CalledProcessError as e:
+    sys.stdout.write('Failed to change install name\n')
+
 # defining extension    
 def _ext_modules(include_dir, library, lib_dir, runtime_dir=None):
     ext_args = dict(include_dirs = [include_dir],
                     libraries = library,
                     library_dirs = [lib_dir],
                     sources = ['ibm_db.c'])
+
+    # On OS X, the 'runtime_library_dirs' argument doesnt actually do the
+    # right thing, with respect to emitting the correct linker flag (see
+    # distutils/unixcompiler.py) to set the target object's rpath; it always 
+    # emits -L (ie: the compile-time search flag)
+    #
+    # The correct method to set rpath on OS X, is to pass the -Wl,-rpath flag,
+    # which can be specified via the 'extra_link_args' argument to the
+    # Extension object
+    #
     if runtime_dir:
+      if 'darwin' not in sys.platform:
         ext_args['runtime_library_dirs'] = [runtime_dir]
+      else:
+        ext_args['extra_link_args'] = ['-Wl,-rpath,' + runtime_dir]
+
     ibm_db = Extension('ibm_db', **ext_args)
     return [ibm_db]
 
@@ -155,9 +194,23 @@ if (('IBM_DB_HOME' not in os.environ) and ('IBM_DB_DIR' not in os.environ) and (
     tmp_path = get_python_lib()
     easy_cli_path = os.path.join(tmp_path, 'ibm_db-%s.egg' % ("-".join([VERSION, "py"+sys.version.split(" ")[0][0:3]]) if('win32' in sys.platform) else "-".join([VERSION, "py"+sys.version.split(" ")[0][0:3], os_, arch_])), 'clidriver')
     pip_cli_path = os.path.join(tmp_path, 'clidriver')
-    ibm_db_lib_runtime = os.path.join('$ORIGIN', 'clidriver', 'lib')
     ibm_db_dir = 'clidriver'
     ibm_db_lib = os.path.join(ibm_db_dir, 'lib')
+
+    # OS X doesnt support the notion of $ORIGIN for the rpath. Instead - since
+    # we're embedding the recently downloaded version of the client drivers in
+    # with the package, set the rpath to be '@loader_path/clidriver/lib', in
+    # order to indicate that we should look for libdb2 in clidriver/lib,
+    # relative to where ibm_db.so is located.
+    #
+    # In this way, we should be entirely relocatable, no matter where the
+    # ibm_db package is installed.
+    #
+    if 'darwin' in sys.platform:
+      ibm_db_lib_runtime = os.path.join('@loader_path', 'clidriver', 'lib')
+    else:
+      ibm_db_lib_runtime = os.path.join('$ORIGIN', 'clidriver', 'lib')
+
     
     if not os.path.isdir('clidriver'):
         url = 'https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/' + cliFileName
@@ -178,6 +231,9 @@ if (('IBM_DB_HOME' not in os.environ) and ('IBM_DB_DIR' not in os.environ) and (
         open(os.path.join(ibm_db_dir, '__init__.py'), 'w').close()
         if os.path.isfile('ibm_db.dll'):
             shutil.copy('ibm_db.dll', 'clidriver')
+
+        if 'darwin' in sys.platform and os.path.isfile('clidriver/lib/libdb2.dylib'):
+          fixup_install_name('clidriver/lib/libdb2.dylib', '@rpath/libdb2.dylib')
         
     if prebuildIbmdbPYD:
         _setWinEnv("PATH", "clidriver")
