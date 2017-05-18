@@ -36,6 +36,7 @@
 
 /* True global resources - no need for thread safety here */
 static struct _ibm_db_globals *ibm_db_globals;
+static PyObject *sqlExceptionType;
 
 static void _python_ibm_db_check_sql_errors( SQLHANDLE handle, SQLSMALLINT hType, int rc, int cpy_to_global, char* ret_str, int API, SQLSMALLINT recno );
 static int _python_ibm_db_assign_options( void* handle, int type, long opt_key, PyObject *data );
@@ -501,7 +502,17 @@ static void _python_ibm_db_check_sql_errors( SQLHANDLE handle, SQLSMALLINT hType
 			}
 			sprintf((char*)errMsg, "%s SQLCODE=%d", (char*)msg, (int)sqlcode);
 			if (cpy_to_global != 0 && rc != 1 ) {
-				PyErr_SetString(PyExc_Exception, (char *) errMsg);
+                PyObject_SetAttrString(sqlExceptionType,
+                                       "sqlmsg",
+                                       PyUnicode_FromString(msg));
+                PyObject_SetAttrString(sqlExceptionType, 
+                                       "sqlcode", 
+                                       PyInt_FromLong(sqlcode));
+                PyObject_SetAttrString(sqlExceptionType, 
+                                       "sqlstate", 
+                                       PyUnicode_FromStringAndSize((char *)sqlstate,
+                                                                  SQL_SQLSTATE_SIZE));
+                PyErr_SetString(sqlExceptionType, (char *)errMsg);
 			}
 
 			switch (rc) {
@@ -11204,5 +11215,10 @@ INIT_ibm_db(void) {
 	Py_INCREF(&server_infoType);
 	PyModule_AddObject(m, "IBM_DBServerInfo", (PyObject *)&server_infoType);
 	PyModule_AddIntConstant(m, "SQL_ATTR_QUERY_TIMEOUT", SQL_ATTR_QUERY_TIMEOUT);
+
+    sqlExceptionType = 
+      PyErr_NewException("ibm_db.IBM_DBSQLException", NULL, NULL);
+    Py_INCREF(sqlExceptionType);
+    PyModule_AddObject(m, "IBM_DBSQLException", sqlExceptionType);
 	return MOD_RETURN_VAL(m);
 }
