@@ -503,7 +503,7 @@ static void _python_ibm_db_check_sql_errors( SQLHANDLE handle, SQLSMALLINT hType
 			sprintf((char*)errMsg, "%s SQLCODE=%d", (char*)msg, (int)sqlcode);
 			if (cpy_to_global != 0 && rc != 1 ) {
                 PyObject_SetAttrString(sqlExceptionType,
-                                       "sqlmsg",
+                                       "sqltext",
                                        PyUnicode_FromString(msg));
                 PyObject_SetAttrString(sqlExceptionType, 
                                        "sqlcode", 
